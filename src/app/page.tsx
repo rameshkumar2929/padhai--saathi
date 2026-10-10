@@ -44,6 +44,8 @@ export default function Home() {
   const [extraQuestion, setExtraQuestion] = useState<Question | null>(null);
   const [extraAnswer, setExtraAnswer] = useState<number | null>(null);
   const [checkRound, setCheckRound] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [celebrationTopic, setCelebrationTopic] = useState<string | null>(null);
 
   const t = labels[language];
   const selectedChapter = chapters.find((item) => item.id === chapterId) ?? chapters[0];
@@ -59,8 +61,14 @@ export default function Home() {
   useEffect(() => {
     const restore = () => {
       setProgress(readProgress());
-      const cachedNickname = localStorage.getItem("padhai-saathi-nickname");
-      if (cachedNickname) setNickname(cachedNickname);
+      try {
+        const cachedNickname = localStorage.getItem("padhai-saathi-nickname");
+        if (cachedNickname) setNickname(cachedNickname);
+      } catch {
+        setMessage(t.loadError);
+      }
+      if (new URLSearchParams(window.location.search).get("view") === "progress") setView("progress");
+      setReady(true);
     };
     const restoreTimer = window.setTimeout(restore, 0);
     if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -168,6 +176,10 @@ export default function Home() {
       topics: { ...progress.topics, [key]: record },
       history: [{ id: `${now}-${key}-practice`, chapter: selectedChapter.id, chapterTitle: selectedChapter.title[0], topic: currentTopic.id, topicTitle: currentTopic.title[0], score, total: practiceQuestions.length, date: now, kind: "practice" as const }, ...progress.history].slice(0, 100),
     });
+    if (record.status === "ok" && previous?.status !== "ok") {
+      setCelebrationTopic(currentTopic.id);
+      window.setTimeout(() => setCelebrationTopic(null), 1800);
+    }
     setPracticeDone(true);
     setMessage(`${score}/${practiceQuestions.length} ${t.correct}`);
   }
@@ -232,15 +244,51 @@ export default function Home() {
         <button className={view === "progress" ? "nav-link active" : "nav-link"} onClick={() => setView("progress")}>{t.navProgress}</button>
         <Link className="nav-link" href="/teacher">{t.navTeacher}</Link>
       </nav>
+      <label className="sr-only" htmlFor="nav-language">{t.language}</label>
+      <select id="nav-language" className="nav-language" value={language} onChange={(event) => setLanguage(event.target.value as Language)} aria-label={t.language}>
+        {(["en", "hi", "gu"] as Language[]).map((item) => <option key={item} value={item}>{languageNames[item]}</option>)}
+      </select>
     </header>
 
     <main className="main-content">
+      {!ready ? <section className="app-skeleton" aria-label="Loading study dashboard" aria-busy="true"><span className="skeleton skeleton-kicker" /><span className="skeleton skeleton-title" /><span className="skeleton skeleton-copy" /><span className="skeleton skeleton-panel" /></section> : <>
       {view === "start" && <section className="start-screen">
         <div className="start-copy">
           <div className="eyebrow"><span className="eyebrow-dot" />{t.kicker}</div>
           <h1>{t.title}</h1>
           <p className="intro">{t.subtitle}</p>
           <div className="quiet-note"><span className="note-icon">01</span><span>{t.learningNote}</span></div>
+        </div>
+        <div className="hero-art" role="img" aria-label="A student learning with a phone, books and a lightbulb">
+          <svg viewBox="0 0 520 430" aria-hidden="true" focusable="false">
+            <ellipse cx="267" cy="380" rx="206" ry="24" fill="#dce9df" />
+            <circle cx="273" cy="196" r="165" fill="#e9f2ec" />
+            <path d="M106 284c34-47 63-58 104-40 33 15 54 40 85 29 39-14 47-55 108-50 32 3 57 22 77 52v87H106z" fill="#d4e6dc" />
+            <path d="M355 69c0-24 19-43 43-43s43 19 43 43c0 15-8 28-19 36-7 5-11 13-11 22h-26c0-9-4-17-11-22-11-8-19-21-19-36z" fill="#f5c45f" />
+            <path d="M376 135h43m-37 12h31" stroke="#b97715" strokeWidth="5" strokeLinecap="round" />
+            <path d="M398 4V0m-51 18-8-8m110 8 8-8m-90 117v11m61-11v11" stroke="#d79a2b" strokeWidth="4" strokeLinecap="round" />
+            <path d="M210 189c0-37 27-67 61-67s61 30 61 67v7H210z" fill="#153c39" />
+            <path d="M218 187c0-33 23-57 53-57s53 24 53 57v28c0 35-23 61-53 61s-53-26-53-61z" fill="#a96543" />
+            <path d="M218 195c16-6 28-17 38-34 16 15 39 24 68 25v-18c0-28-22-51-53-51s-53 23-53 51z" fill="#153c39" />
+            <path d="M244 220h2m48 0h2" stroke="#153c39" strokeWidth="6" strokeLinecap="round" />
+            <path d="M251 243c8 7 18 7 26 0" fill="none" stroke="#7d3d31" strokeWidth="4" strokeLinecap="round" />
+            <path d="M188 327c7-46 35-72 82-72s75 26 82 72v50H188z" fill="#08766d" />
+            <path d="m244 258 25 25 25-25" fill="#f8f7f1" />
+            <path d="M199 315 160 348m183-33 38 32" stroke="#a96543" strokeWidth="21" strokeLinecap="round" />
+            <path d="M386 322h75v10h-75z" fill="#d79a2b" />
+            <path d="M379 332h88v11h-88z" fill="#075b56" />
+            <path d="M390 343h75v11h-75z" fill="#eaa740" />
+            <rect x="110" y="312" width="47" height="67" rx="7" fill="#fffefa" stroke="#b5ccc0" strokeWidth="3" />
+            <rect x="119" y="302" width="47" height="67" rx="7" transform="rotate(8 119 302)" fill="#e7a83d" />
+            <rect x="117" y="310" width="47" height="67" rx="7" transform="rotate(8 117 310)" fill="#fffefa" stroke="#d8e4dc" strokeWidth="3" />
+            <path d="m145 330 23-3 6 49-23 3z" fill="#075b56" />
+            <rect x="168" y="288" width="47" height="82" rx="8" transform="rotate(-8 168 288)" fill="#153c39" />
+            <rect x="174" y="294" width="35" height="66" rx="4" transform="rotate(-8 174 294)" fill="#bfe0d5" />
+            <circle cx="194" cy="351" r="2" fill="#075b56" />
+            <path d="M84 108h54m-27-27v54" stroke="#d79a2b" strokeWidth="5" strokeLinecap="round" opacity=".8" />
+            <circle cx="410" cy="228" r="7" fill="#e6a43c" />
+            <circle cx="134" cy="184" r="5" fill="#08766d" />
+          </svg>
         </div>
         <div className="start-form">
           <div className="field-group"><label>{t.language}</label><div className="segmented language-options" role="group" aria-label={t.language}>
@@ -265,12 +313,14 @@ export default function Home() {
         <button className="text-button" onClick={goHome}>← {t.back}</button>
         <div className="section-heading"><div className="eyebrow">{selectedLabel(selectedChapter.title)}</div><h1>{t.checkTitle}</h1><p>{t.checkSub}</p></div>
         <div className="check-progress"><span>{t.question} 1–{diagnostic.length} {t.of} {diagnostic.length}</span><span>{answers.filter((answer) => answer < 0).length} {language === "en" ? "left" : language === "hi" ? "बाकी" : "બાકી"}</span></div>
-        <div className="question-list">{diagnostic.map(({ topic, question }, index) => <article className="question-card" key={`${topic.id}-${index}`}>
+        <div className="progress-track check-track" role="progressbar" aria-label="Questions answered" aria-valuemin={0} aria-valuemax={diagnostic.length} aria-valuenow={answers.filter((answer) => answer >= 0).length}><span style={{ width: `${answers.filter((answer) => answer >= 0).length / diagnostic.length * 100}%` }} /></div>
+        <div className="check-layout"><div className="check-main"><div className="question-list">{diagnostic.map(({ topic, question }, index) => <article className="question-card" key={`${topic.id}-${index}`}>
           <div className="question-meta"><span>{t.question} {index + 1}</span><span>{selectedLabel(topic.title)}</span></div><h2>{selectedLabel(question.p)}</h2>
           <div className="answer-options">{question.o.map((option, optionIndex) => <button key={optionIndex} onClick={() => setAnswers((current) => current.map((value, answerIndex) => answerIndex === index ? optionIndex : value))} className={answers[index] === optionIndex ? "answer-option selected" : "answer-option"}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{selectedLabel(option)}</span></button>)}</div>
         </article>)}</div>
         {message && <p className="notice" role="status">{message}</p>}
-        <button className="primary-button" onClick={submitCheck}>{t.submit}<span aria-hidden="true">→</span></button>
+        <button className="primary-button" onClick={submitCheck}>{t.submit}<span aria-hidden="true">→</span></button></div>
+        <aside className="topic-status-panel" aria-labelledby="topic-status-title"><h2 id="topic-status-title">Topics</h2><p>Keep an eye on each skill as you go.</p><ul>{diagnosticScores.map(({ topic, status, score, total }) => <li key={topic.id}><span>{selectedLabel(topic.title)}</span><span className={`status-pill status-${status}`}>{statusLabel(status, language)}</span><small>{score}/{total}</small></li>)}</ul></aside></div>
       </section>}
 
       {view === "results" && <section className="content-section">
@@ -295,14 +345,16 @@ export default function Home() {
       {view === "practice" && <section className="content-section">
         <button className="text-button" onClick={() => setView("results")}>← {t.back}</button>
         <div className="section-heading"><div className="eyebrow">{selectedLabel(selectedChapter.title)}</div><h1>{t.practiceTitle}</h1><p>{selectedLabel(currentTopic.title)}</p></div>
-        {!practiceDone && practiceQuestions[practiceIndex] && <article className="question-card practice-card">
+        {!practiceDone && practiceQuestions[practiceIndex] && <>
+          <div className="practice-progress"><div className="check-progress"><span>{t.question} {practiceIndex + 1} {t.of} {practiceQuestions.length}</span><span>{Math.round((practiceIndex + (practiceAnswers[practiceIndex] >= 0 ? 1 : 0)) / practiceQuestions.length * 100)}%</span></div><div className="progress-track" role="progressbar" aria-label="Practice progress" aria-valuemin={0} aria-valuemax={practiceQuestions.length} aria-valuenow={practiceIndex + (practiceAnswers[practiceIndex] >= 0 ? 1 : 0)}><span style={{ width: `${(practiceIndex + (practiceAnswers[practiceIndex] >= 0 ? 1 : 0)) / practiceQuestions.length * 100}%` }} /></div></div>
+          <article className="question-card practice-card">
           <div className="question-meta"><span>{t.question} {practiceIndex + 1} {t.of} {practiceQuestions.length}</span><span>{selectedLabel(currentTopic.title)}</span></div><h2>{selectedLabel(practiceQuestions[practiceIndex].p)}</h2>
           <div className="answer-options">{practiceQuestions[practiceIndex].o.map((option, optionIndex) => <button key={optionIndex} onClick={() => setPracticeAnswers((current) => current.map((value, answerIndex) => answerIndex === practiceIndex ? optionIndex : value))} className={practiceAnswers[practiceIndex] === optionIndex ? "answer-option selected" : "answer-option"}><span className="option-letter">{String.fromCharCode(65 + optionIndex)}</span><span>{selectedLabel(option)}</span></button>)}</div>
           {practiceAnswers[practiceIndex] >= 0 && <div className={practiceAnswers[practiceIndex] === practiceQuestions[practiceIndex].a ? "answer-feedback right" : "answer-feedback wrong"}>{selectedLabel(practiceQuestions[practiceIndex].e)}</div>}
           <div className="practice-controls">{practiceIndex > 0 && <button className="text-button" onClick={() => setPracticeIndex((value) => value - 1)}>← {t.back}</button>}
             {practiceIndex < practiceQuestions.length - 1 ? <button className="primary-button" onClick={() => { if (practiceAnswers[practiceIndex] < 0) setMessage(t.answerFirst); else { setPracticeIndex((value) => value + 1); setMessage(""); } }}>{t.nextQuestion}<span aria-hidden="true">→</span></button> : <button className="primary-button" onClick={finishPractice}>{t.finishPractice}<span aria-hidden="true">→</span></button>}
           </div>
-        </article>}
+        </article></>}
         {practiceDone && <article className="session-complete"><div className="completion-mark">{practiceAnswers.filter((answer, index) => answer === practiceQuestions[index]?.a).length}</div><div className="eyebrow">{t.sessionResult}</div><h2>{message}</h2><p>{progress.topics[topicKey(selectedChapter.id, currentTopic.id)]?.successfulPracticeSessions ?? 0} {t.correctSessions}</p><div className="lesson-actions"><button className="primary-button" onClick={() => beginPractice(currentTopic)}>{t.nextSession}<span aria-hidden="true">→</span></button><button className="outline-button" onClick={() => setView("results")}>{t.results}</button></div></article>}
         <div className="ai-tools"><button className="text-button" disabled={aiBusy} onClick={() => void askSaathi("practice")}>{aiBusy ? "…" : t.aiPractice}</button>{extraQuestion && <div className="extra-question"><span className="eyebrow">{message}</span><h2>{selectedLabel(extraQuestion.p)}</h2><div className="answer-options">{extraQuestion.o.map((option, index) => <button key={index} className={extraAnswer === index ? "answer-option selected" : "answer-option"} onClick={() => setExtraAnswer(index)}><span className="option-letter">{String.fromCharCode(65 + index)}</span><span>{selectedLabel(option)}</span></button>)}</div>{extraAnswer !== null && <div className={extraAnswer === extraQuestion.a ? "answer-feedback right" : "answer-feedback wrong"}>{selectedLabel(extraQuestion.e)}</div>}</div>}</div>
         {message && !practiceDone && !extraQuestion && <p className="notice" role="status">{message}</p>}
@@ -317,8 +369,10 @@ export default function Home() {
             const chapter = chapters.find((item) => item.id === chapterKey);
             const topic = chapter?.topics.find((item) => item.id === topicId);
             if (!topic || !chapter) return null;
-            return <div className="progress-topic" key={key}><div><strong>{selectedLabel(topic.title)}</strong><span>{selectedLabel(chapter.title)}</span></div><span className={`status-pill status-${record.status}`}>{statusLabel(record.status, language)}</span><div className="mastery-cell"><span>{t.mastery}</span><strong>{record.mastery}%</strong></div></div>;
+            const circumference = 2 * Math.PI * 22;
+            return <article className={`progress-topic ${celebrationTopic === topic.id ? "topic-celebration" : ""}`} key={key}><div><strong>{selectedLabel(topic.title)}</strong><span>{selectedLabel(chapter.title)}</span></div><span className={`status-pill status-${record.status} ${celebrationTopic === topic.id ? "celebration-chip" : ""}`}>{statusLabel(record.status, language)}</span><div className="mastery-cell"><svg className="mastery-ring" viewBox="0 0 56 56" role="img" aria-label={`${record.mastery}% ${t.mastery}`}><circle cx="28" cy="28" r="22" /><circle className="mastery-ring-value" cx="28" cy="28" r="22" style={{ strokeDasharray: circumference, strokeDashoffset: circumference * (1 - record.mastery / 100) }} /></svg><strong>{record.mastery}%</strong></div></article>;
           })}</div>
+          {progress.history.length > 0 && <section className="history-chart-section" aria-labelledby="history-chart-title"><div className="history-chart-heading"><div><span className="eyebrow">Learning over time</span><h2 id="history-chart-title">Score history</h2></div><span className="chart-key"><i />Score</span></div><div className="history-chart"><svg viewBox="0 0 600 190" role="img" aria-label="Recent study scores shown over time"><path className="chart-gridline" d="M35 35H580M35 82H580M35 129H580M35 166H580" /><text x="4" y="39">100%</text><text x="13" y="86">66%</text><text x="13" y="133">33%</text><text x="22" y="170">0</text>{(() => { const entries = progress.history.slice(0, 8).reverse(); const points = entries.map((entry, index) => `${entries.length === 1 ? 307 : 45 + index * (520 / (entries.length - 1))},${166 - entry.score / Math.max(entry.total, 1) * 131}`).join(" "); return <><polyline className="chart-line" points={points} />{entries.map((entry, index) => <circle key={entry.id} className="chart-point" cx={entries.length === 1 ? 307 : 45 + index * (520 / (entries.length - 1))} cy={166 - entry.score / Math.max(entry.total, 1) * 131} r="5"><title>{entry.score}/{entry.total}</title></circle>)}</>; })()}</svg></div></section>}
         </>}
         <h2 className="subheading history-heading">{t.history}</h2>
         {progress.history.length === 0 ? <p className="muted-copy">{t.noProgress}</p> : <div className="history-list">{progress.history.slice(0, 12).map((entry) => {
@@ -327,7 +381,8 @@ export default function Home() {
         })}</div>}
         <button className="text-button clear-button" onClick={clearProgress}>{t.clear}</button>
       </section>}
+    </>}
     </main>
-    <footer className="site-footer"><span>{t.footer}</span><span>SDG 4 <i aria-hidden="true" /></span></footer>
+    <footer className="site-footer"><span><strong>Padhai Saathi</strong><small>Built by Ramesh Kumar, Marwadi University</small></span><span className="sdg-badge">SDG 4 <i aria-hidden="true" /></span></footer>
   </div>;
 }
