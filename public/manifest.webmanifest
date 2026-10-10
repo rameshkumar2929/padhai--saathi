@@ -1,0 +1,11 @@
+{
+  "name": "Padhai Saathi",
+  "short_name": "Saathi",
+  "description": "A multilingual study companion for Classes 8-10",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f7f1",
+  "theme_color": "#075b56",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
