@@ -1,6 +1,8 @@
 import bank from "@/data/study-bank.json";
+import prerequisiteData from "@/data/prerequisites.json";
+import { coreLanguage, type Language } from "@/lib/languages";
 
-export type Language = "en" | "hi" | "gu";
+export type { Language } from "@/lib/languages";
 export type Subject = "math" | "science";
 export type Status = "weak" | "improving" | "ok";
 
@@ -46,7 +48,7 @@ export interface ScoreEntry {
   score: number;
   total: number;
   date: string;
-  kind: "check" | "practice";
+  kind: "check" | "practice" | "exam";
 }
 
 export interface ProgressData {
@@ -56,6 +58,7 @@ export interface ProgressData {
 
 export const chapters = bank.chapters as Chapter[];
 export const questionSets = bank.questionSets as unknown as Record<string, QuestionSet>;
+export const prerequisiteMap = prerequisiteData as Record<string, string[]>;
 export const storageKey = "padhai-saathi-progress-v1";
 
 export const labels = {
@@ -135,7 +138,7 @@ export function topicKey(chapterId: string, topicId: string) {
 }
 
 export function statusLabel(status: Status, language: Language) {
-  const t = labels[language];
+  const t = labels[coreLanguage(language)];
   return status === "weak" ? t.weak : status === "improving" ? t.improving : t.ok;
 }
 
@@ -162,4 +165,17 @@ export function freshPracticeQuestions(topic: Topic, offset: number, amount = 5)
 
 export function emptyProgress(): ProgressData {
   return { topics: {}, history: [] };
+}
+
+export function createPrerequisiteCheck(chapterId: string, amount = 5): { topic: Topic; question: Question }[] {
+  const families = prerequisiteMap[chapterId] ?? [];
+  const topics = chapters.flatMap((chapter) => chapter.topics);
+  const available = families.flatMap((family) => {
+    const topic = topics.find((item) => item.family === family);
+    const questions = questionSets[family]?.questions ?? [];
+    return topic ? questions.map((question) => ({ topic, question })) : [];
+  });
+  return available.length === 0
+    ? []
+    : Array.from({ length: amount }, (_, index) => available[index % available.length]);
 }

@@ -9,6 +9,8 @@ A low-bandwidth, installable study companion for Classes 8-10. Students choose G
 - Step-sized built-in explanations and five-question practice sessions. A saved topic reaches OK mastery only after correct answers in at least two separate practice sessions.
 - Local progress and score history in `localStorage`; only an optional nickname is stored, and it is not sent to the server.
 - An optional Gemini route for a simpler explanation or one extra question. The API key remains on the server. Missing keys, timeouts, invalid model JSON, rate limits, and model errors use the built-in bank instead.
+- On-demand translation for the other 17 languages, cached on-device after successful translation. If Gemini is unavailable, original English content remains available and is labeled as untranslated.
+- A doubt assistant with optional image and browser speech input, local doubt history, speech playback, and a friendly offline fallback.
 - `/teacher` is a static demo summary. Its class counts are sample numbers, not collected student data.
 - A web manifest and service worker cache the app shell and same-origin assets after the first visit. AI needs a connection; progress is device-local and is not synced.
 
@@ -40,6 +42,17 @@ npm run start
 
 The API route calls Gemini 2.5 Flash, asks for JSON, validates the response, retries once when the returned JSON is invalid, times out quickly, caches repeated requests for 15 minutes, and applies a best-effort per-IP limit of ten uncached calls per hour.
 
+## Optional shared teacher doubts
+
+The app works without Supabase; student doubts then stay in the browser and the teacher page shows demo data. To enable shared anonymous questions on the free Supabase tier:
+
+1. Create a Supabase project without enabling paid features or adding billing details.
+2. Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor.
+3. Add `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and a long random `TEACHER_ACCESS_TOKEN` to `.env.local` and your Vercel server environment. Never use a `NEXT_PUBLIC_` prefix for these values.
+4. Open `/teacher` and enter the teacher access token to view or mark shared doubts answered.
+
+Only nickname, class, subject, question text, answer text, status, and timestamp are stored. Uploaded image bytes are not persisted. The service-role key stays server-side; browser access to the teacher inbox requires the configured token. Without the token, the inbox remains unavailable and the page stays in demo mode.
+
 ## Deploy free
 
 ### GitHub
@@ -63,4 +76,4 @@ After deployment, test `/`, `/teacher`, all three languages, and AI fallback by 
 
 ## Privacy and limits
 
-No sign-in, email, phone number, real name, database, analytics, or student sync is implemented. A nickname is optional and remains in local browser storage. Clearing browser storage removes progress. The teacher view is sample-only, the question bank is a starter curriculum rather than an official syllabus, and AI-generated material may need teacher review.
+No student sign-in, email, phone number, or real-name collection is implemented. A nickname is optional and remains in local browser storage unless optional shared teacher storage is explicitly configured. Clearing browser storage removes local progress and doubt history. The default teacher dashboard uses sample-only aggregates, the question bank is a starter curriculum rather than an official syllabus, and AI-generated material may need teacher review.

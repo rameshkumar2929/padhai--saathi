@@ -1,20 +1,17 @@
 import { createHash } from "node:crypto";
 import { headers } from "next/headers";
+import { coreLanguage, getLanguage, isLanguage } from "@/lib/languages";
 import { chapters, questionSets, type Language, type Question } from "@/lib/study";
 
 type Mode = "practice" | "simplify";
 type ApiResult = { question?: Question; explanation?: string; fallback: boolean };
-type RequestBody = { mode: Mode; language: Language; topic: string; family: string; grade: string };
+type RequestBody = { mode: Mode; language: Language; topic: string; family: string; grade: string; lowData?: boolean };
 
 const rateLimit = new Map<string, { count: number; resetsAt: number }>();
 const responseCache = new Map<string, { result: ApiResult; expiresAt: number }>();
 const WINDOW_MS = 60 * 60 * 1000;
 const MAX_REQUESTS = 10;
 const CACHE_MS = 15 * 60 * 1000;
-
-function isLanguage(value: unknown): value is Language {
-  return value === "en" || value === "hi" || value === "gu";
-}
 
 function isQuestion(value: unknown): value is Question {
   if (!value || typeof value !== "object") return false;
@@ -25,7 +22,7 @@ function isQuestion(value: unknown): value is Question {
 
 function fallback(body: RequestBody): ApiResult {
   const set = questionSets[body.family];
-  if (body.mode === "simplify") return { explanation: set?.explanation[body.language === "gu" ? 2 : body.language === "hi" ? 1 : 0] ?? "Try the example again using smaller steps.", fallback: true };
+  if (body.mode === "simplify") return { explanation: set?.explanation[coreLanguage(body.language) === "gu" ? 2 : coreLanguage(body.language) === "hi" ? 1 : 0] ?? "Try the example again using smaller steps.", fallback: true };
   const question = set?.questions[Math.floor(Math.random() * (set.questions.length || 1))];
   return { question, fallback: true };
 }
@@ -46,10 +43,14 @@ function validateResult(value: unknown, body: RequestBody): ApiResult | null {
 }
 
 function promptFor(body: RequestBody) {
-  const language = body.language === "gu" ? "Gujarati" : body.language === "hi" ? "Hindi" : "English";
-  const safety = `You are a kind Class ${body.grade} study helper. Topic: ${body.topic}. Use simple everyday examples suitable for rural students. Write in ${language}. Return ONLY a valid JSON object. No markdown.`;
+  const language = getLanguage(body.language).name;
+  const length = body.lowData ? "Keep the answer very short, under 50 words." : "Use a few simple steps.";
+  const safety = `You are a kind Class ${body.grade} study helper. Topic: ${body.topic}. Use simple everyday examples suitable for rural students. Write in ${language}. ${length} Return ONLY a valid JSON object. No markdown.`;
   if (body.mode === "simplify") return `${safety} Give a short re-explanation in 3 to 5 small steps, under 120 words. JSON shape: {"explanation":"..."}`;
-  return `${safety} Make exactly one fresh multiple choice question with 4 options and a short explanation. Provide all strings in English, Hindi, Gujarati, in that order. JSON shape: {"question":{"p":["en","hi","gu"],"o":[["en","hi","gu"],["en","hi","gu"],["en","hi","gu"],["en","hi","gu"]],"a":0,"e":["en","hi","gu"]}}. answer a must be 0, 1, 2, or 3.`;
+  const languages = ["en", "hi", "gu"].includes(body.language)
+    ? "Provide each string in English, Hindi, and Gujarati, in that order."
+    : `Write every string in ${language} and repeat that same translation in all three string slots.`;
+  return `${safety} Make exactly one fresh multiple choice question with 4 options and a short explanation. ${languages} JSON shape: {"question":{"p":["en","hi","gu"],"o":[["en","hi","gu"],["en","hi","gu"],["en","hi","gu"],["en","hi","gu"]],"a":0,"e":["en","hi","gu"]}}. answer a must be 0, 1, 2, or 3.`;
 }
 
 async function generate(body: RequestBody, apiKey: string): Promise<ApiResult | null> {
@@ -85,7 +86,7 @@ export async function POST(request: Request) {
   if (!unknownBody || typeof unknownBody !== "object") return Response.json({ error: "Invalid request" }, { status: 400 });
   const body = unknownBody as Partial<RequestBody>;
   const knownTopic = typeof body.family === "string" && typeof body.topic === "string" && chapters.some((chapter) => chapter.topics.some((topic) => topic.family === body.family && topic.title[0] === body.topic));
-  if ((body.mode !== "practice" && body.mode !== "simplify") || !isLanguage(body.language) || typeof body.family !== "string" || !Object.hasOwn(questionSets, body.family) || !knownTopic || !["8", "9", "10"].includes(body.grade ?? "")) {
+  if ((body.mode !== "practice" && body.mode !== "simplify") || !isLanguage(body.language) || typeof body.family !== "string" || !Object.hasOwn(questionSets, body.family) || !knownTopic || !["8", "9", "10"].includes(body.grade ?? "") || (body.lowData !== undefined && typeof body.lowData !== "boolean")) {
     return Response.json({ error: "Invalid study request" }, { status: 400 });
   }
   const validBody = body as RequestBody;

@@ -1,0 +1,10 @@
+{
+  "rational-numbers": ["number", "fractions", "percent", "data"],
+  "algebra-basics": ["number", "fractions", "percent"],
+  "geometry": ["geometry", "measure", "patterns"],
+  "ratio-data": ["fractions", "percent", "data"],
+  "materials": ["matter", "materials", "energy", "force"],
+  "living-world": ["life", "ecology", "matter", "energy"],
+  "force-energy": ["force", "energy", "sound", "electricity"],
+  "environment": ["ecology", "life", "energy", "matter"]
+}

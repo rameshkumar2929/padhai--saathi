@@ -1,5 +1,5 @@
-const CACHE = "padhai-saathi-v2";
-const SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "padhai-saathi-v3";
+const SHELL = ["/", "/teacher", "/doubts", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
