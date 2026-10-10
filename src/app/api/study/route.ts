@@ -6,12 +6,33 @@ import { chapters, questionSets, type Language, type Question } from "@/lib/stud
 type Mode = "practice" | "simplify";
 type ApiResult = { question?: Question; explanation?: string; fallback: boolean };
 type RequestBody = { mode: Mode; language: Language; topic: string; family: string; grade: string; lowData?: boolean };
+type ProviderError = { code: string; category: string; recovery: string; upstreamStatus?: number };
+type Generation = { result: ApiResult | null; error?: ProviderError };
 
 const rateLimit = new Map<string, { count: number; resetsAt: number }>();
 const responseCache = new Map<string, { result: ApiResult; expiresAt: number }>();
 const WINDOW_MS = 60 * 60 * 1000;
 const MAX_REQUESTS = 10;
 const CACHE_MS = 15 * 60 * 1000;
+
+function classifyProviderError(status: number, upstreamMessage = ""): ProviderError {
+  const message = upstreamMessage.toLowerCase();
+  if ([400, 401, 403].includes(status) || message.includes("api key")) {
+    return { code: "GEMINI_AUTH", category: "Gemini rejected the API key or request", recovery: "Check that GEMINI_API_KEY is valid and enabled for the Generative Language API, then redeploy.", upstreamStatus: status };
+  }
+  if (status === 429) return { code: "GEMINI_QUOTA", category: "Gemini free-tier quota or rate limit reached", recovery: "Wait for the quota window to reset, or check the Google AI Studio quota for this key.", upstreamStatus: status };
+  if (status >= 500) return { code: "GEMINI_UNAVAILABLE", category: "Google Gemini is temporarily unavailable", recovery: "Retry in a moment. Built-in study questions remain available.", upstreamStatus: status };
+  return { code: "GEMINI_REQUEST", category: "Gemini rejected this request", recovery: "Check the model and request configuration. Built-in study content remains available.", upstreamStatus: status };
+}
+
+async function readUpstreamError(response: Response): Promise<string> {
+  try {
+    const payload = await response.json() as { error?: { message?: string } };
+    return typeof payload.error?.message === "string" ? payload.error.message.slice(0, 240) : "";
+  } catch {
+    return "";
+  }
+}
 
 function isQuestion(value: unknown): value is Question {
   if (!value || typeof value !== "object") return false;
@@ -53,7 +74,7 @@ function promptFor(body: RequestBody) {
   return `${safety} Make exactly one fresh multiple choice question with 4 options and a short explanation. ${languages} JSON shape: {"question":{"p":["en","hi","gu"],"o":[["en","hi","gu"],["en","hi","gu"],["en","hi","gu"],["en","hi","gu"]],"a":0,"e":["en","hi","gu"]}}. answer a must be 0, 1, 2, or 3.`;
 }
 
-async function generate(body: RequestBody, apiKey: string): Promise<ApiResult | null> {
+async function generate(body: RequestBody, apiKey: string): Promise<Generation> {
   const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch(endpoint, {
@@ -63,21 +84,34 @@ async function generate(body: RequestBody, apiKey: string): Promise<ApiResult | 
         contents: [{ role: "user", parts: [{ text: promptFor(body) }] }],
         generationConfig: { responseMimeType: "application/json", temperature: 0.7, maxOutputTokens: 600 },
       }),
-      signal: AbortSignal.timeout(4500),
+      signal: AbortSignal.timeout(12000),
       cache: "no-store",
     });
-    if (!response.ok) return null;
-    const payload = await response.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    if (!response.ok) {
+      const error = classifyProviderError(response.status, await readUpstreamError(response));
+      console.error("Gemini request failed", { code: error.code, status: response.status });
+      return { result: null, error };
+    }
+    let payload: { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    try {
+      payload = await response.json() as typeof payload;
+    } catch {
+      return { result: null, error: { code: "GEMINI_INVALID_RESPONSE", category: "Gemini returned unreadable JSON", recovery: "Retry the request. If it repeats, check the configured model and API status." } };
+    }
     const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
+    if (!text) return { result: null, error: { code: "GEMINI_EMPTY_RESPONSE", category: "Gemini returned no generated content", recovery: "Retry once. Built-in study content remains available." } };
     try {
       const parsed = validateResult(parseModelText(text), body);
-      if (parsed) return parsed;
+      if (parsed) return { result: parsed };
     } catch {
-      if (attempt === 1) return null;
+      if (attempt === 1) return { result: null, error: { code: "GEMINI_INVALID_JSON", category: "Gemini response did not match the required study format", recovery: "Retry the action. Use the built-in question bank while the AI response format is reviewed." } };
     }
   }
-  return null;
+  return { result: null, error: { code: "GEMINI_INVALID_RESULT", category: "Gemini response failed validation", recovery: "Retry the action. Built-in study content remains available." } };
+}
+
+export async function GET() {
+  return Response.json({ provider: "Google Gemini", model: "gemini-2.5-flash", configured: Boolean(process.env.GEMINI_API_KEY) });
 }
 
 export async function POST(request: Request) {
@@ -90,6 +124,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid study request" }, { status: 400 });
   }
   const validBody = body as RequestBody;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    const error: ProviderError = { code: "GEMINI_NOT_CONFIGURED", category: "Gemini is not configured on this deployment", recovery: "Add GEMINI_API_KEY to the server environment and redeploy. The built-in question bank remains available." };
+    return Response.json({ ...fallback(validBody), providerError: error });
+  }
   const headersList = await headers();
   const ip = headersList.get("x-real-ip") ?? headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   const cacheKey = createHash("sha256").update(JSON.stringify(validBody)).digest("hex");
@@ -98,22 +137,31 @@ export async function POST(request: Request) {
   const now = Date.now();
   const limit = rateLimit.get(ip);
   if (limit && limit.resetsAt > now && limit.count >= MAX_REQUESTS) {
-    return Response.json({ ...fallback(validBody), message: "offline" }, { headers: { "Retry-After": String(Math.ceil((limit.resetsAt - now) / 1000)) } });
+    const error: ProviderError = { code: "APP_RATE_LIMIT", category: "Padhai Saathi request limit reached", recovery: "Wait until the retry window ends, or continue with the built-in question bank." };
+    return Response.json({ ...fallback(validBody), providerError: error }, { status: 429, headers: { "Retry-After": String(Math.ceil((limit.resetsAt - now) / 1000)) } });
   }
   rateLimit.set(ip, !limit || limit.resetsAt <= now ? { count: 1, resetsAt: now + WINDOW_MS } : { ...limit, count: limit.count + 1 });
   if (rateLimit.size > 1000) {
     for (const [address, entry] of rateLimit) if (entry.resetsAt <= now) rateLimit.delete(address);
     if (rateLimit.size > 1000) rateLimit.delete(rateLimit.keys().next().value as string);
   }
-  let result = fallback(validBody);
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey) {
-    try { result = await generate(validBody, apiKey) ?? result; } catch { result = fallback(validBody); }
+  let generated: Generation;
+  try {
+    generated = await generate(validBody, apiKey);
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    generated = { result: null, error: timedOut
+      ? { code: "GEMINI_TIMEOUT", category: "Gemini did not respond before the request timed out", recovery: "Retry on a steadier connection. Built-in questions are available in the meantime." }
+      : { code: "GEMINI_NETWORK", category: "Padhai Saathi could not reach Gemini", recovery: "Check the deployment's outbound network and try again." } };
+    console.error("Gemini transport failed", { code: generated.error?.code });
   }
-  responseCache.set(cacheKey, { result, expiresAt: now + CACHE_MS });
-  if (responseCache.size > 250) {
-    for (const [key, entry] of responseCache) if (entry.expiresAt <= now) responseCache.delete(key);
-    if (responseCache.size > 250) responseCache.delete(responseCache.keys().next().value as string);
+  const result = generated.result ?? fallback(validBody);
+  if (generated.result) {
+    responseCache.set(cacheKey, { result, expiresAt: now + CACHE_MS });
+    if (responseCache.size > 250) {
+      for (const [key, entry] of responseCache) if (entry.expiresAt <= now) responseCache.delete(key);
+      if (responseCache.size > 250) responseCache.delete(responseCache.keys().next().value as string);
+    }
   }
-  return Response.json(result);
+  return Response.json({ ...result, ...(generated.error ? { providerError: generated.error } : {}) });
 }

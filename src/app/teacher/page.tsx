@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import BrandMark from "@/components/BrandMark";
+import DashboardFrame from "@/components/DashboardFrame";
 import { getLanguage, isLanguage, LANGUAGES, type Language } from "@/lib/languages";
 
 const demoTopics = [
@@ -93,8 +93,7 @@ export default function TeacherPage() {
     }
   }
 
-  return <main className="teacher-page" data-theme={theme}>
-    <header className="topbar"><Link href="/" className="brand"><BrandMark /><span>Padhai Saathi</span></Link><nav aria-label="Main navigation" className="main-nav"><Link className="nav-link" href="/">Home</Link><Link className="nav-link" href="/?view=progress">Progress</Link><Link className="nav-link active" href="/teacher" aria-current="page">Teacher</Link><Link className="nav-link" href="/doubts">Doubts</Link></nav><div className="teacher-settings"><label className="sr-only" htmlFor="teacher-language">Language</label><select id="teacher-language" className="nav-language" value={language} onChange={(event) => setLanguage(event.target.value as Language)}>{LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.nativeName}</option>)}</select><button className="setting-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>{theme === "dark" ? "Light" : "Dark"}</button></div></header>
+  return <DashboardFrame active="teacher" profileName="Teacher" context="Demo classroom" theme={theme} onThemeToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} controls={<><label className="sr-only" htmlFor="teacher-language">Language</label><select id="teacher-language" className="nav-language" value={language} onChange={(event) => setLanguage(event.target.value as Language)}>{LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.nativeName}</option>)}</select></>}>
     <section className="teacher-content">
       <div className="eyebrow"><span className="eyebrow-dot" />Classroom overview</div>
       <h1>Where should we practise together?</h1>
@@ -110,6 +109,5 @@ export default function TeacherPage() {
       </section>
       <Link href="/" className="primary-button teacher-cta">Start a student check <span aria-hidden="true">→</span></Link>
     </section>
-    <footer className="site-footer"><span><strong>Padhai Saathi</strong><small>Built by Ramesh Kumar, Marwadi University</small></span><span className="sdg-badge">SDG 4 <i aria-hidden="true" /></span></footer>
-  </main>;
+  </DashboardFrame>;
 }

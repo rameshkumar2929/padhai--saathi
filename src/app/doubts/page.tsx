@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import BrandMark from "@/components/BrandMark";
+import DashboardFrame from "@/components/DashboardFrame";
 import { coreLanguage, getLanguage, LANGUAGES, translationStorageKey } from "@/lib/languages";
 import type { CoreLanguage, Language } from "@/lib/languages";
 
@@ -71,6 +72,7 @@ export default function DoubtsPage() {
   const [translationState, setTranslationState] = useState<"idle" | "loading" | "ready" | "fallback">("idle");
   const [grade, setGrade] = useState("8");
   const [subject, setSubject] = useState<"math" | "science">("math");
+  const [nickname, setNickname] = useState("Learner");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [image, setImage] = useState<PendingImage | null>(null);
@@ -90,12 +92,14 @@ export default function DoubtsPage() {
       const savedLanguage = localStorage.getItem("padhai-saathi-language") as Language | null;
       const savedGrade = localStorage.getItem("padhai-saathi-grade");
       const savedSubject = localStorage.getItem("padhai-saathi-subject");
+      const savedNickname = localStorage.getItem("padhai-saathi-nickname");
       const savedTheme = localStorage.getItem("padhai-saathi-theme");
       const savedLowData = localStorage.getItem("padhai-saathi-low-data");
       const savedSimpleReading = localStorage.getItem("padhai-saathi-simple-reading");
       if (savedLanguage && LANGUAGES.some((item) => item.code === savedLanguage)) setLanguage(savedLanguage);
       if (["8", "9", "10"].includes(savedGrade ?? "")) setGrade(savedGrade ?? "8");
       if (savedSubject === "math" || savedSubject === "science") setSubject(savedSubject);
+      if (savedNickname) setNickname(savedNickname);
       if (savedTheme === "dark" || savedTheme === "light") setTheme(savedTheme);
       else if (window.matchMedia("(prefers-color-scheme: light)").matches) setTheme("light");
       if (savedLowData !== null) setLowData(savedLowData === "true");
@@ -284,25 +288,12 @@ export default function DoubtsPage() {
     return core === "en" ? text : coreDoubtLabels[text]?.[core] ?? (core === "gu" || core === "hi" ? text : translatedLabels[text] ?? text);
   };
 
-  return <div className="site-shell doubts-shell" data-theme={theme} data-low-data={lowData} data-simple-reading={simpleReading}>
-    <header className="topbar">
-      <Link href="/" className="brand" aria-label="Padhai Saathi home"><BrandMark /><span>Padhai Saathi</span></Link>
-      <nav aria-label="Main navigation" className="main-nav">
-        <Link className="nav-link" href="/">{copy("Home")}</Link>
-        <Link className="nav-link" href="/?view=progress">Progress</Link>
-        <Link className="nav-link" href="/teacher">Teacher</Link>
-        <Link className="nav-link active" href="/doubts" aria-current="page">{copy("Doubts")}</Link>
-      </nav>
-      <label className="sr-only" htmlFor="doubt-language">Language</label>
-      <select id="doubt-language" className="nav-language" value={language} onChange={(event) => setLanguage(event.target.value as Language)}>
-        {LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.nativeName}</option>)}
-      </select>
-      <div className="header-settings">
-        <button className={lowData ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={lowData} onClick={() => { const next = !lowData; setLowData(next); try { localStorage.setItem("padhai-saathi-low-data", String(next)); } catch { /* Preferences are optional. */ } }}>Low data {lowData ? "On" : "Off"}</button>
-        <button className={simpleReading ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={simpleReading} onClick={() => { const next = !simpleReading; setSimpleReading(next); try { localStorage.setItem("padhai-saathi-simple-reading", String(next)); } catch { /* Preferences are optional. */ } }}>Simple text {simpleReading ? "On" : "Off"}</button>
-        <button className="setting-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}>{theme === "dark" ? "Light" : "Dark"}</button>
-      </div>
-    </header>
+  return <DashboardFrame active="ai" profileName={nickname} grade={grade} context={`${grade} · ${subject === "math" ? "Maths" : "Science"}`} theme={theme} onThemeToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} language={language} lowData={lowData} simpleReading={simpleReading} controls={<>
+    <button className={lowData ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={lowData} onClick={() => { const next = !lowData; setLowData(next); try { localStorage.setItem("padhai-saathi-low-data", String(next)); } catch { /* Preferences are optional. */ } }}>Low data {lowData ? "On" : "Off"}</button>
+    <button className={simpleReading ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={simpleReading} onClick={() => { const next = !simpleReading; setSimpleReading(next); try { localStorage.setItem("padhai-saathi-simple-reading", String(next)); } catch { /* Preferences are optional. */ } }}>Simple text {simpleReading ? "On" : "Off"}</button>
+    <label className="sr-only" htmlFor="doubt-language">Language</label>
+    <select id="doubt-language" className="nav-language" value={language} onChange={(event) => setLanguage(event.target.value as Language)}>{LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.nativeName}</option>)}</select>
+  </>}>
     {!["en", "hi", "gu"].includes(language) && <div className={`translation-notice translation-${translationState}`} role="status">{translationState === "ready" ? copy("AI-translated") : translationState === "loading" ? "Translating study text…" : copy("Translation unavailable. English text is shown.")}</div>}
     <main className="main-content">
       <section className="content-section doubts-section" aria-labelledby="doubts-title">
@@ -352,6 +343,5 @@ export default function DoubtsPage() {
         {messages.length > 0 && <button className="text-button clear-button" type="button" onClick={() => { if (window.confirm(copy("Clear doubt history on this device?"))) setMessages([]); }}>{copy("Clear doubt history")}</button>}
       </section>
     </main>
-    <footer className="site-footer"><span><strong>Padhai Saathi</strong><small>Built by Ramesh Kumar, Marwadi University</small></span><span className="sdg-badge">SDG 4 <i aria-hidden="true" /></span></footer>
-  </div>;
+  </DashboardFrame>;
 }

@@ -3,17 +3,21 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import BrandMark from "@/components/BrandMark";
+import DashboardFrame from "@/components/DashboardFrame";
 import { coreLanguage, getLanguage, isLanguage, LANGUAGES, translationStorageKey } from "@/lib/languages";
+import { readLocalList, workspaceKeys, writeLocalList, type ExamPlan, type StudyTask } from "@/lib/workspace-data";
 import {
   chapters, createPrerequisiteCheck, createQuestionOrder, emptyProgress, freshPracticeQuestions, labels,
   prerequisiteMap, questionSets, statusFor, statusLabel, storageKey, topicKey,
   type Language, type ProgressData, type Question, type ScoreEntry, type Status, type Subject, type Topic,
 } from "@/lib/study";
 
-type View = "start" | "prerequisite" | "check" | "results" | "learn" | "practice" | "progress" | "plan" | "exam";
+type View = "dashboard" | "start" | "prerequisite" | "check" | "results" | "learn" | "practice" | "progress" | "plan" | "exam";
 type Theme = "dark" | "light";
 type ExamQuestion = { topic: Topic; question: Question };
-type DailyActivity = { date: string; answered: number; streak: number; lastStudyDay: string };
+type AiProviderState = { provider: string; model: string; configured: boolean };
+type AiProviderError = { code: string; category: string; recovery: string; upstreamStatus?: number };
+type DailyActivity = { date: string; answered: number; streak: number; lastStudyDay: string; studySeconds: number };
 const dailyActivityKey = "padhai-saathi-daily-activity-v1";
 const dailyGoal = 10;
 
@@ -23,7 +27,7 @@ function dayStamp(date = new Date()) {
 
 function readDailyActivity(): DailyActivity {
   const today = dayStamp();
-  const empty: DailyActivity = { date: today, answered: 0, streak: 0, lastStudyDay: "" };
+  const empty: DailyActivity = { date: today, answered: 0, streak: 0, lastStudyDay: "", studySeconds: 0 };
   try {
     const saved = localStorage.getItem(dailyActivityKey);
     if (!saved) return empty;
@@ -31,7 +35,7 @@ function readDailyActivity(): DailyActivity {
     if (activity.date === today) return activity;
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    return { ...activity, date: today, answered: 0, streak: activity.lastStudyDay === dayStamp(yesterday) ? activity.streak : 0 };
+    return { ...activity, date: today, answered: 0, studySeconds: 0, streak: activity.lastStudyDay === dayStamp(yesterday) ? activity.streak : 0 };
   } catch {
     return empty;
   }
@@ -64,9 +68,13 @@ export default function Home() {
   const [subject, setSubject] = useState<Subject>("math");
   const [chapterId, setChapterId] = useState(chapters[0].id);
   const [nickname, setNickname] = useState("");
-  const [view, setView] = useState<View>("start");
+  const [view, setView] = useState<View>("dashboard");
   const [progress, setProgress] = useState<ProgressData>(emptyProgress);
-  const [dailyActivity, setDailyActivity] = useState<DailyActivity>({ date: "", answered: 0, streak: 0, lastStudyDay: "" });
+  const [dailyActivity, setDailyActivity] = useState<DailyActivity>({ date: "", answered: 0, streak: 0, lastStudyDay: "", studySeconds: 0 });
+  const [studyTasks, setStudyTasks] = useState<StudyTask[]>([]);
+  const [examPlans, setExamPlans] = useState<ExamPlan[]>([]);
+  const [dashboardRange, setDashboardRange] = useState<"today" | "7d" | "30d">("7d");
+  const [focusSeconds, setFocusSeconds] = useState<number | null>(null);
   const [prerequisiteQuestions, setPrerequisiteQuestions] = useState<{ topic: Topic; question: Question }[]>([]);
   const [prerequisiteAnswers, setPrerequisiteAnswers] = useState<number[]>([]);
   const [prerequisiteScore, setPrerequisiteScore] = useState<number | null>(null);
@@ -82,6 +90,8 @@ export default function Home() {
   const [examDone, setExamDone] = useState(false);
   const [message, setMessage] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiProvider, setAiProvider] = useState<AiProviderState | null>(null);
+  const [aiProviderError, setAiProviderError] = useState<AiProviderError | null>(null);
   const [aiExplanation, setAiExplanation] = useState("");
   const [extraQuestion, setExtraQuestion] = useState<Question | null>(null);
   const [extraAnswer, setExtraAnswer] = useState<number | null>(null);
@@ -152,6 +162,8 @@ export default function Home() {
     const restore = () => {
       setProgress(readProgress());
       setDailyActivity(readDailyActivity());
+      setStudyTasks(readLocalList<StudyTask>(workspaceKeys.tasks));
+      setExamPlans(readLocalList<ExamPlan>(workspaceKeys.exams));
       setCurrentTime(Date.now());
       try {
         const cachedNickname = localStorage.getItem("padhai-saathi-nickname");
@@ -176,12 +188,39 @@ export default function Home() {
       } catch {
         setMessage(t.loadError);
       }
-      if (new URLSearchParams(window.location.search).get("view") === "progress") setView("progress");
+      const query = new URLSearchParams(window.location.search);
+      if (query.get("view") === "progress") setView("progress");
+      const requestedChapter = chapters.find((chapter) => chapter.id === query.get("chapter"));
+      if (requestedChapter) {
+        setChapterId(requestedChapter.id);
+        setSubject(requestedChapter.subject);
+      }
+      if (query.get("study") === "check" && requestedChapter) {
+        const prerequisites = createPrerequisiteCheck(requestedChapter.id, 5);
+        if (prerequisites.length > 0) {
+          setPrerequisiteQuestions(prerequisites);
+          setPrerequisiteAnswers(Array(prerequisites.length).fill(-1));
+          setView("prerequisite");
+        } else {
+          setAnswers(Array(10).fill(-1));
+          setView("check");
+        }
+      }
       setReady(true);
     };
     const restoreTimer = window.setTimeout(restore, 0);
     if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
     return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/study").then(async (response) => {
+      if (!response.ok) throw new Error("Provider status unavailable");
+      const status = await response.json() as AiProviderState;
+      if (!cancelled) setAiProvider(status);
+    }).catch(() => { if (!cancelled) setAiProvider(null); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -235,6 +274,34 @@ export default function Home() {
     if (!ready || !dailyActivity.date) return;
     try { localStorage.setItem(dailyActivityKey, JSON.stringify(dailyActivity)); } catch { setMessage(t.loadError); }
   }, [dailyActivity, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    try {
+      writeLocalList(workspaceKeys.tasks, studyTasks);
+      writeLocalList(workspaceKeys.exams, examPlans);
+    } catch { setMessage(t.loadError); }
+  }, [examPlans, ready, studyTasks]);
+
+  useEffect(() => {
+    if (!ready || !["prerequisite", "check", "learn", "practice", "exam"].includes(view)) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") setDailyActivity((activity) => {
+        const today = dayStamp();
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const streak = activity.lastStudyDay === today ? activity.streak : activity.lastStudyDay === dayStamp(yesterday) ? activity.streak + 1 : 1;
+        return { ...activity, date: today, studySeconds: (activity.date === today ? activity.studySeconds : 0) + 15, streak, lastStudyDay: today };
+      });
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [ready, view]);
+
+  useEffect(() => {
+    if (focusSeconds === null || focusSeconds <= 0) return;
+    const timer = window.setInterval(() => setFocusSeconds((seconds) => seconds === null ? null : Math.max(0, seconds - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [focusSeconds]);
 
   useEffect(() => {
     if (view !== "exam" || examDone || examQuestions.length === 0) return;
@@ -308,7 +375,7 @@ export default function Home() {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const streak = current.lastStudyDay === today ? current.streak : current.lastStudyDay === dayStamp(yesterday) ? current.streak + 1 : 1;
-      return { date: today, answered: (current.date === today ? current.answered : 0) + amount, streak, lastStudyDay: today };
+      return { date: today, answered: (current.date === today ? current.answered : 0) + amount, streak, lastStudyDay: today, studySeconds: current.date === today ? current.studySeconds : 0 };
     });
   }
 
@@ -494,14 +561,17 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, language, topic: currentTopic.title[0], family: currentTopic.family, grade, lowData }),
       });
-      const data = await response.json() as { fallback?: boolean; question?: Question; explanation?: string };
+      const data = await response.json() as { fallback?: boolean; question?: Question; explanation?: string; providerError?: AiProviderError; error?: string };
+      if (!response.ok && !data.question && !data.explanation) throw new Error(data.error ?? `Study request failed (${response.status}). Try again.`);
+      setAiProviderError(data.providerError ?? null);
+      const recoveryMessage = data.providerError ? `${data.providerError.category}. ${data.providerError.recovery}` : "";
       if (mode === "practice" && data.question) {
         setExtraQuestion(data.question);
         setExtraAnswer(null);
-        setMessage(data.fallback ? t.aiFallback : t.aiReady);
+        setMessage(data.fallback ? recoveryMessage || t.aiFallback : t.aiReady);
       } else if (data.explanation) {
         setAiExplanation(data.explanation);
-        setMessage(data.fallback ? t.aiExplainFallback : "");
+        setMessage(data.fallback ? recoveryMessage || t.aiExplainFallback : "");
       } else {
         throw new Error("No study content returned");
       }
@@ -538,6 +608,69 @@ export default function Home() {
   const progressEntries = Object.entries(progress.topics);
   const weekCutoff = currentTime - 7 * 24 * 60 * 60 * 1000;
   const weeklyHistory = progress.history.filter((entry) => new Date(entry.date).getTime() >= weekCutoff);
+  const rangeHistory = progress.history.filter((entry) => {
+    if (!currentTime) return false;
+    if (dashboardRange === "today") return new Date(entry.date).toDateString() === new Date(currentTime).toDateString();
+    const days = dashboardRange === "7d" ? 7 : 30;
+    return new Date(entry.date).getTime() >= currentTime - days * 24 * 60 * 60 * 1000;
+  });
+  const rangeCorrect = rangeHistory.reduce((sum, item) => sum + item.score, 0);
+  const rangeQuestions = rangeHistory.reduce((sum, item) => sum + item.total, 0);
+  const weakTopicRows = progressEntries.flatMap(([key, record]) => {
+    if (record.status !== "weak") return [];
+    const [chapterId, topicId] = key.split(":");
+    const chapter = chapters.find((item) => item.id === chapterId);
+    const topic = chapter?.topics.find((item) => item.id === topicId);
+    return chapter && topic ? [{ key, chapter, topic, record }] : [];
+  });
+  const upcomingPlans = examPlans.filter((plan) => plan.date >= dayStamp()).sort((left, right) => left.date.localeCompare(right.date));
+  const dashboardTasks = studyTasks.filter((task) => task.scheduledFor <= dayStamp() && task.status === "todo").sort((left, right) => ({ urgent: 0, high: 1, normal: 2, low: 3 }[left.priority] - { urgent: 0, high: 1, normal: 2, low: 3 }[right.priority]));
+  const bucketCount = dashboardRange === "30d" ? 30 : 7;
+  const activityBuckets = Array.from({ length: bucketCount }, (_, index) => {
+    const date = new Date(currentTime);
+    date.setDate(date.getDate() - (bucketCount - 1 - index));
+    const stamp = dayStamp(date);
+    const total = rangeHistory.filter((entry) => dayStamp(new Date(entry.date)) === stamp).reduce((sum, entry) => sum + entry.total, 0);
+    return { date, value: total };
+  });
+
+  function setTaskStatus(taskId: string, status: "todo" | "done") {
+    setStudyTasks((items) => items.map((task) => task.id === taskId ? { ...task, status } : task));
+  }
+
+  function updateTask(taskId: string, update: Partial<StudyTask>) {
+    setStudyTasks((items) => items.map((task) => task.id === taskId ? { ...task, ...update } : task));
+  }
+
+  function createRevisionTasks() {
+    if (weakTopicRows.length === 0) {
+      setMessage("No weak topics are recorded yet. Run a chapter check to create evidence-based revision tasks.");
+      return;
+    }
+    const existingKeys = new Set(studyTasks.map((task) => `${task.topic}:${task.subject}`));
+    const newTasks = weakTopicRows.filter(({ topic, chapter }) => !existingKeys.has(`${topic.title[0]}:${chapter.subject}`)).map(({ topic, chapter }) => ({
+      id: `${Date.now()}-${topic.id}-${Math.random().toString(36).slice(2, 7)}`,
+      title: `Revise ${topic.title[0]}`,
+      subject: chapter.subject === "math" ? "Maths" : "Science",
+      topic: topic.title[0],
+      priority: "high" as const,
+      durationMinutes: 15,
+      scheduledFor: dayStamp(),
+      status: "todo" as const,
+      createdAt: new Date().toISOString(),
+    }));
+    if (newTasks.length === 0) {
+      setMessage("Revision tasks for your recorded weak topics are already scheduled.");
+      return;
+    }
+    setStudyTasks((items) => [...newTasks, ...items]);
+    setMessage(`${newTasks.length} revision ${newTasks.length === 1 ? "task" : "tasks"} created from your recorded weak topics.`);
+  }
+
+  const dashboardAside = view === "dashboard" ? <>
+    <section className="context-panel-block"><h3>Study recommendations</h3>{weakTopicRows.length > 0 ? <>{weakTopicRows.slice(0, 3).map(({ key, topic, chapter }) => <div className="context-recommendation" key={key}><span className="workspace-status weak">Review</span><strong>{selectedLabel(topic.title)}</strong><small>{selectedLabel(chapter.title)}</small></div>)}<button className="workspace-button" type="button" onClick={createRevisionTasks}>Add weak topics to today</button></> : <div className="workspace-empty"><strong>No weak topics recorded</strong><p>Complete a chapter check to get recommendations based on your results.</p></div>}</section>
+    <section className="context-panel-block"><h3>Upcoming exams</h3>{upcomingPlans.length > 0 ? upcomingPlans.slice(0, 2).map((plan) => <div className="context-recommendation" key={plan.id}><strong>{plan.name}</strong><small>{Math.max(0, Math.ceil((new Date(`${plan.date}T00:00:00`).getTime() - Date.now()) / 86_400_000))} days · {plan.subjects.join(", ")}</small></div>) : <div className="workspace-empty"><strong>No exam dates added</strong><p>Exam countdowns appear after you enter a date in Exam Planner.</p><Link className="workspace-button" href="/planner">Create exam plan</Link></div>}</section>
+  </> : undefined;
   const improvedThisWeek = progressEntries.flatMap(([key, record]) => {
     if ((record.status !== "ok" && record.status !== "improving") || new Date(record.updatedAt).getTime() < weekCutoff) return [];
     const [chapterId, topicId] = key.split(":");
@@ -552,31 +685,19 @@ export default function Home() {
   });
   const weeklyShareText = `Padhai Saathi weekly progress: ${weeklyHistory.length} study results, ${improvedThisWeek.length} topics improving, ${dailyActivity.streak}-day streak. Topics to revisit: ${weakThisWeek.join(", ") || "none"}.`;
 
-  return <div className="site-shell" data-language={language} data-theme={theme} data-low-data={lowData} data-simple-reading={simpleReading}>
-    <header className="topbar">
-      <Link href="/" className="brand" aria-label="Padhai Saathi home"><BrandMark /><span>Padhai Saathi</span></Link>
-      <nav aria-label="Main navigation" className="main-nav">
-        <button className={view !== "progress" ? "nav-link active" : "nav-link"} onClick={goHome}>{t.navStudy}</button>
-        <button className={view === "plan" ? "nav-link active" : "nav-link"} onClick={() => setView("plan")}>My plan</button>
-        <button className={view === "exam" ? "nav-link active" : "nav-link"} onClick={startBoardExam}>{selectedText("Board exam")}</button>
-        <button className={view === "progress" ? "nav-link active" : "nav-link"} onClick={() => setView("progress")}>{t.navProgress}</button>
-        <Link className="nav-link" href="/teacher">{t.navTeacher}</Link>
-        <Link className="nav-link nav-doubts" href="/doubts">Doubts</Link>
-      </nav>
-      <div className="header-settings">
-        <button className={lowData ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={lowData} onClick={() => setLowData((current) => !current)} title="Toggle low-data mode">Low data {lowData ? "On" : "Off"}</button>
-        <button className={simpleReading ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={simpleReading} onClick={() => setSimpleReading((current) => !current)} title="Toggle simple-reading mode">Simple text {simpleReading ? "On" : "Off"}</button>
-        <button className="setting-toggle theme-toggle" type="button" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}>{theme === "dark" ? "Light" : "Dark"}</button>
-      </div>
-      <label className="sr-only" htmlFor="nav-language">{t.language}</label>
-      <input id="nav-language" className="nav-language" type="search" list="language-options" value={languageSearch} onChange={(event) => {
-        const query = event.target.value;
-        setLanguageSearch(query);
-        const selected = LANGUAGES.find((item) => item.nativeName.toLocaleLowerCase() === query.toLocaleLowerCase() || item.name.toLocaleLowerCase() === query.toLocaleLowerCase());
-        if (selected) setLanguage(selected.code);
-      }} aria-label={t.language} autoComplete="off" />
-      <datalist id="language-options">{LANGUAGES.map((item) => <option key={item.code} value={item.nativeName} label={item.name} />)}</datalist>
-    </header>
+  const activeDestination = view === "progress" ? "analytics" : view === "plan" ? "planner" : view === "exam" ? "quizzes" : "dashboard";
+  return <DashboardFrame active={activeDestination} profileName={nickname || "Learner"} grade={grade} context={selectedLabel(selectedChapter.title)} theme={theme} onThemeToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} language={language} lowData={lowData} simpleReading={simpleReading} aside={dashboardAside} controls={<>
+    <button className={lowData ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={lowData} onClick={() => setLowData((current) => !current)} title="Toggle low-data mode">Low data {lowData ? "On" : "Off"}</button>
+    <button className={simpleReading ? "setting-toggle active" : "setting-toggle"} type="button" aria-pressed={simpleReading} onClick={() => setSimpleReading((current) => !current)} title="Toggle simple-reading mode">Simple text {simpleReading ? "On" : "Off"}</button>
+    <label className="sr-only" htmlFor="nav-language">{t.language}</label>
+    <input id="nav-language" className="nav-language" type="search" list="language-options" value={languageSearch} onChange={(event) => {
+      const query = event.target.value;
+      setLanguageSearch(query);
+      const selected = LANGUAGES.find((item) => item.nativeName.toLocaleLowerCase() === query.toLocaleLowerCase() || item.name.toLocaleLowerCase() === query.toLocaleLowerCase());
+      if (selected) setLanguage(selected.code);
+    }} aria-label={t.language} autoComplete="off" />
+    <datalist id="language-options">{LANGUAGES.map((item) => <option key={item.code} value={item.nativeName} label={item.name} />)}</datalist>
+  </>}>
     {!["en", "hi", "gu"].includes(language) && <div className={`translation-notice translation-${translationState}`} role="status">
       {translationState === "ready" ? "AI-translated" : translationState === "loading" ? "Translating study text…" : "Translation unavailable. English text is shown."}
     </div>}
@@ -584,6 +705,40 @@ export default function Home() {
 
     <main className="main-content">
       {!ready ? <section className="app-skeleton" aria-label="Loading study dashboard" aria-busy="true"><span className="skeleton skeleton-kicker" /><span className="skeleton skeleton-title" /><span className="skeleton skeleton-copy" /><span className="skeleton skeleton-panel" /></section> : <>
+      {view === "dashboard" && <section className="workspace-overview" aria-labelledby="learning-overview-title">
+        <header className="workspace-page-header"><div><span className="eyebrow">STUDENT WORKSPACE</span><h1 id="learning-overview-title">Learning Overview</h1><p>{nickname ? `Welcome back, ${nickname}.` : "Your study activity and next steps."} · {currentTime ? new Date(currentTime).toLocaleDateString(language === "gu" ? "gu-IN" : language === "hi" ? "hi-IN" : "en-IN", { weekday: "long", month: "short", day: "numeric" }) : "Today"}</p></div><div className="workspace-date-tabs" role="group" aria-label="Activity range">{(["today", "7d", "30d"] as const).map((range) => <button type="button" key={range} className={dashboardRange === range ? "selected" : ""} aria-pressed={dashboardRange === range} onClick={() => setDashboardRange(range)}>{range === "today" ? "Today" : range === "7d" ? "7 Days" : "30 Days"}</button>)}</div></header>
+        <div className="workspace-grid">
+          <div className="workspace-metrics">
+            <article className="workspace-metric"><span className="workspace-metric-label">Study time today</span><strong className="workspace-metric-value">{Math.floor(dailyActivity.studySeconds / 60)}<small>min</small></strong><span className="workspace-trend">Active study screens only</span></article>
+            <article className="workspace-metric"><span className="workspace-metric-label">Quiz accuracy</span><strong className="workspace-metric-value">{rangeQuestions ? `${Math.round(rangeCorrect / rangeQuestions * 100)}%` : "—"}</strong><span className="workspace-trend">{rangeQuestions ? `${rangeCorrect} / ${rangeQuestions} correct in selected range` : "No quiz attempts in this range"}</span></article>
+            <article className="workspace-metric"><span className="workspace-metric-label">Completed tasks</span><strong className="workspace-metric-value">{studyTasks.filter((task) => task.status === "done").length}</strong><span className="workspace-trend">Saved on this device</span></article>
+            <article className="workspace-metric"><span className="workspace-metric-label">Topics to revisit</span><strong className="workspace-metric-value">{weakTopicRows.length}</strong><span className="workspace-trend">From recorded topic checks</span></article>
+          </div>
+
+          <section className="workspace-panel overview-tasks span-7" aria-labelledby="today-operations-title"><h2 className="workspace-panel-title"><strong id="today-operations-title">Today’s study operations</strong><span className="workspace-tag">{dashboardTasks.length} due</span></h2>
+            {dashboardTasks.length === 0 ? <div className="workspace-empty"><strong>No study tasks scheduled</strong><p>Build a revision queue from weak topics recorded by your chapter checks, or create a plan around an exam date.</p><div className="workspace-row-actions"><button className="workspace-button" type="button" onClick={createRevisionTasks}>Build revision queue</button><Link className="workspace-button" href="/planner">Create exam plan</Link></div></div> : <div className="workspace-task-list">{dashboardTasks.map((task) => <article className="workspace-task-row" key={task.id}><button className={`task-check ${task.status === "done" ? "checked" : ""}`} type="button" aria-label={`${task.status === "done" ? "Reopen" : "Complete"} ${task.title}`} aria-pressed={task.status === "done"} onClick={() => setTaskStatus(task.id, task.status === "done" ? "todo" : "done")}>{task.status === "done" ? "✓" : ""}</button><div className="workspace-task-main"><strong>{task.title}</strong><small>{task.subject} · {task.topic} · {task.durationMinutes} min</small></div><label className="sr-only" htmlFor={`priority-${task.id}`}>Priority for {task.title}</label><select id={`priority-${task.id}`} className="workspace-inline-select" value={task.priority} onChange={(event) => updateTask(task.id, { priority: event.target.value as StudyTask["priority"] })}><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><label className="sr-only" htmlFor={`date-${task.id}`}>Schedule date for {task.title}</label><input className="workspace-date-input" id={`date-${task.id}`} type="date" value={task.scheduledFor} onChange={(event) => updateTask(task.id, { scheduledFor: event.target.value })}/><Link className="workspace-button" href={`/?chapter=${encodeURIComponent(chapters.find((chapter) => chapter.topics.some((topic) => topic.title[0] === task.topic))?.id ?? selectedChapter.id)}&study=check`}>Start</Link></article>)}</div>}
+          </section>
+
+          <section className="workspace-panel overview-exams span-5" aria-labelledby="upcoming-exams-title"><h2 className="workspace-panel-title"><strong id="upcoming-exams-title">Upcoming exams</strong><Link href="/planner" className="workspace-panel-link">Manage</Link></h2>{upcomingPlans.length === 0 ? <div className="workspace-empty"><strong>No exam dates added</strong><p>Enter a real exam date and available study time to build your plan.</p><Link className="workspace-button primary" href="/planner">Create Exam Plan</Link></div> : upcomingPlans.slice(0, 3).map((plan) => {
+              const days = Math.max(0, Math.ceil((new Date(`${plan.date}T00:00:00`).getTime() - new Date(dayStamp()).getTime()) / 86_400_000));
+              const linkedTasks = studyTasks.filter((task) => task.examId === plan.id);
+              const complete = linkedTasks.filter((task) => task.status === "done").length;
+              const percent = linkedTasks.length ? Math.round(complete / linkedTasks.length * 100) : 0;
+              return <article className="workspace-exam-row" key={plan.id}><div className="workspace-exam-date"><strong>{days}</strong><small>days</small></div><div className="workspace-exam-main"><strong>{plan.name}</strong><small>{new Date(`${plan.date}T00:00:00`).toLocaleDateString()} · {plan.subjects.join(", ")}</small><div className="workspace-progress-track"><span style={{ width: `${percent}%` }}/></div><small>{linkedTasks.length ? `${complete}/${linkedTasks.length} prep tasks` : "No prep tasks generated yet"}</small></div></article>;
+            })}</section>
+
+          <section className="workspace-panel overview-activity span-7" aria-labelledby="learning-activity-title"><h2 className="workspace-panel-title"><strong id="learning-activity-title">Learning activity</strong><span>{dashboardRange === "today" ? "Questions answered · Today" : `Questions answered · ${dashboardRange === "7d" ? "7 days" : "30 days"}`}</span></h2>{rangeHistory.length === 0 ? <div className="workspace-empty"><strong>No quiz activity for this range</strong><p>Complete a chapter check or practice session to see real learning activity here.</p></div> : <svg className="workspace-meter" viewBox="0 0 600 130" role="img" aria-label="Questions answered by day in the selected range"><path className="workspace-gridline" d="M34 18H590M34 50H590M34 82H590M34 108H590"/><text x="2" y="21">max</text><text x="7" y="111">0</text>{(() => { const max = Math.max(1, ...activityBuckets.map((bucket) => bucket.value)); const points = activityBuckets.map((bucket, index) => `${34 + index * (556 / Math.max(activityBuckets.length - 1, 1))},${108 - bucket.value / max * 84}`).join(" "); return <><polyline className="workspace-chart-line" points={points}/>{activityBuckets.map((bucket, index) => <circle className="workspace-chart-point" key={dayStamp(bucket.date)} cx={34 + index * (556 / Math.max(activityBuckets.length - 1, 1))} cy={108 - bucket.value / max * 84} r="3"><title>{`${dayStamp(bucket.date)}: ${bucket.value} questions`}</title></circle>)}</>; })()}</svg>}</section>
+
+          <section className="workspace-panel overview-weak span-5" aria-labelledby="weak-topics-title"><h2 className="workspace-panel-title"><strong id="weak-topics-title">Topics requiring revision</strong><span className="workspace-status weak">{weakTopicRows.length} weak</span></h2>{weakTopicRows.length === 0 ? <div className="workspace-empty"><strong>No weak topics recorded</strong><p>Weak topics appear here after a quiz records a result that needs review.</p><button className="workspace-button" type="button" onClick={() => setView("start")}>Start a chapter check</button></div> : <div className="workspace-topic-list">{weakTopicRows.slice(0, 5).map(({ key, topic, chapter, record }) => <div className="workspace-topic-row" key={key}><span className="topic-indicator"/><div><strong>{selectedLabel(topic.title)}</strong><small>{selectedLabel(chapter.title)} · {record.mastery}% mastery</small></div><Link href={`/?chapter=${chapter.id}&study=check`} className="workspace-button">Review</Link></div>)}</div>}</section>
+
+          <section className="workspace-panel overview-recent span-12" aria-labelledby="recent-activity-title"><h2 className="workspace-panel-title"><strong id="recent-activity-title">Recent activity</strong><Link href="/analytics" className="workspace-panel-link">View analytics</Link></h2>{progress.history.length === 0 ? <div className="workspace-empty"><strong>No activity recorded yet</strong><p>Quiz results and study sessions will appear here after you complete them.</p></div> : <div className="workspace-recent-list">{progress.history.slice(0, 5).map((entry) => <div className="workspace-recent-row" key={entry.id}><span className={`recent-kind ${entry.kind}`}>{entry.kind === "check" ? "CHK" : entry.kind === "exam" ? "EXM" : "PRA"}</span><div><strong>{entry.topicTitle}</strong><small>{entry.kind === "check" ? "Chapter check" : entry.kind === "exam" ? "Board exam" : "Topic practice"} · {new Date(entry.date).toLocaleString()}</small></div><span className="recent-score">{entry.score}/{entry.total}</span></div>)}</div>}</section>
+
+          <section className="workspace-panel overview-quick span-12" aria-labelledby="quick-actions-title"><h2 className="workspace-panel-title"><strong id="quick-actions-title">Quick actions</strong></h2><div className="workspace-quick-actions"><Link href="/doubts">Ask AI</Link><Link href="/documents">Upload PDF</Link><Link href="/planner">Create Exam Plan</Link><Link href="/quizzes">Generate Quiz</Link><Link href="/flashcards">Create Flashcards</Link><button type="button" onClick={() => setFocusSeconds(25 * 60)} disabled={focusSeconds !== null && focusSeconds > 0}>{focusSeconds && focusSeconds > 0 ? `Focus ${String(Math.floor(focusSeconds / 60)).padStart(2, "0")}:${String(focusSeconds % 60).padStart(2, "0")}` : focusSeconds === 0 ? "Focus complete · restart" : "Start Focus Session"}</button>{focusSeconds !== null && <button type="button" onClick={() => setFocusSeconds(null)}>Stop focus</button>}</div></section>
+        </div>
+        {message && <p className="workspace-toast" role="status">{message}</p>}
+        <button className="workspace-button overview-start-study" type="button" onClick={() => setView("start")}>Start a chapter check</button>
+      </section>}
+
       {view === "start" && <section className="start-screen">
         <div className="start-copy">
           <div className="eyebrow"><span className="eyebrow-dot" />{t.kicker}</div>
@@ -763,6 +918,5 @@ export default function Home() {
     </>}
     </main>
     <Link className="doubt-fab" href="/doubts" aria-label="Ask Saathi">?</Link>
-    <footer className="site-footer"><span><strong>Padhai Saathi</strong><small>Built by Ramesh Kumar, Marwadi University</small></span><span className="sdg-badge">SDG 4 <i aria-hidden="true" /></span></footer>
-  </div>;
+  </DashboardFrame>;
 }
