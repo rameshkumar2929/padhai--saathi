@@ -44,18 +44,14 @@ The API route calls Gemini 2.5 Flash, asks for JSON, validates the response, ret
 
 ### GitHub
 
-Create an empty public or private repository named `padhai-saathi` on GitHub, without a README, license, or gitignore. Then set your own Git identity if needed and run these commands in the project folder:
+Create an empty public or private repository named `padhai-saathi` on GitHub, without a README, license, or gitignore. The local implementation commit is already on the `master` branch. Add the new remote and push it from the project folder:
 
 ```powershell
-git config user.name "YOUR NAME"
-git config user.email "YOUR GITHUB EMAIL"
-git add .
-git commit -m "Build Padhai Saathi study companion"
 git remote add origin https://github.com/YOUR-USERNAME/padhai-saathi.git
 git push -u origin master
 ```
 
-If your GitHub repository uses `main`, replace `master` with `main`. The repository has been initialized locally. Check `git config user.name` before committing; the initial environment may contain a placeholder identity.
+If your GitHub repository uses `main`, replace `master` with `main`. GitHub login is required to create the repository and push.
 
 ### Vercel Hobby
 
